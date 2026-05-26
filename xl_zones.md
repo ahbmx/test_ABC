@@ -372,3 +372,186 @@ If you want, I can also help you build:
 8. A polished Excel UI with buttons/forms
 9. WWPN validation regex
 10. Auto-generated zone naming based on hostname + storage type
+
+
+
+Your code is generating commands row-by-row in sequence, so Excel outputs them as repeated “blocks”:
+
+```text
+setcontext
+alicreate host
+alicreate storage
+zonecreate
+cfgadd
+
+setcontext
+alicreate host
+...
+```
+
+What you want instead is usually:
+
+1. All `setcontext` grouped by FID
+2. All `alicreate`
+3. All `zonecreate`
+4. All `cfgadd`
+5. Then `cfgsave` / `cfgenable`
+
+The cleanest way is to build each command type separately using string collections/dictionaries, then output them grouped.
+
+Try this version:
+
+```vb
+Sub GenerateCommands()
+
+    Dim wsIn As Worksheet
+    Dim wsCmd As Worksheet
+
+    Dim lastRow As Long
+    Dim i As Long
+    Dim outRow As Long
+
+    Set wsIn = Sheets("INPUT")
+    Set wsCmd = Sheets("COMMANDS")
+
+    wsCmd.Cells.Clear
+
+    lastRow = wsIn.Cells(wsIn.Rows.Count, 1).End(xlUp).Row
+
+    ' Collections for grouped commands
+    Dim ctxCmds As Collection
+    Dim aliCmds As Collection
+    Dim zoneCmds As Collection
+    Dim cfgCmds As Collection
+
+    Set ctxCmds = New Collection
+    Set aliCmds = New Collection
+    Set zoneCmds = New Collection
+    Set cfgCmds = New Collection
+
+    ' Prevent duplicate setcontext
+    Dim dictFID As Object
+    Set dictFID = CreateObject("Scripting.Dictionary")
+
+    For i = 2 To lastRow
+
+        Dim hostAlias As String
+        Dim hostWWPN As String
+        Dim storageAlias As String
+        Dim storageWWPN As String
+        Dim zoneName As String
+        Dim fid As String
+
+        hostAlias = Trim(wsIn.Cells(i, 2).Value)
+        hostWWPN = Trim(wsIn.Cells(i, 3).Value)
+
+        storageAlias = Trim(wsIn.Cells(i, 4).Value)
+        storageWWPN = Trim(wsIn.Cells(i, 5).Value)
+
+        zoneName = Trim(wsIn.Cells(i, 6).Value)
+        fid = Trim(wsIn.Cells(i, 7).Value)
+
+        ' Validate required fields
+        If hostAlias <> "" And _
+           hostWWPN <> "" And _
+           storageAlias <> "" And _
+           storageWWPN <> "" And _
+           zoneName <> "" Then
+
+            ' Add setcontext only once per FID
+            If Not dictFID.Exists(fid) Then
+                ctxCmds.Add "setcontext " & fid
+                dictFID.Add fid, True
+            End If
+
+            ' Alias commands
+            aliCmds.Add "alicreate """ & hostAlias & """,""" & hostWWPN & """"
+
+            aliCmds.Add "alicreate """ & storageAlias & """,""" & storageWWPN & """"
+
+            ' Zone commands
+            zoneCmds.Add "zonecreate """ & zoneName & """,""" & _
+                         hostAlias & ";" & storageAlias & """"
+
+            ' CFG commands
+            cfgCmds.Add "cfgadd ""PROD_CFG"",""" & zoneName & """"
+
+        End If
+
+    Next i
+
+    ' Output grouped commands
+    outRow = 1
+
+    Dim item As Variant
+
+    ' Context section
+    For Each item In ctxCmds
+        wsCmd.Cells(outRow, 1).Value = item
+        outRow = outRow + 1
+    Next item
+
+    outRow = outRow + 1
+
+    ' Alias section
+    For Each item In aliCmds
+        wsCmd.Cells(outRow, 1).Value = item
+        outRow = outRow + 1
+    Next item
+
+    outRow = outRow + 1
+
+    ' Zone section
+    For Each item In zoneCmds
+        wsCmd.Cells(outRow, 1).Value = item
+        outRow = outRow + 1
+    Next item
+
+    outRow = outRow + 1
+
+    ' CFGADD section
+    For Each item In cfgCmds
+        wsCmd.Cells(outRow, 1).Value = item
+        outRow = outRow + 1
+    Next item
+
+    outRow = outRow + 1
+
+    ' Final commands
+    wsCmd.Cells(outRow, 1).Value = "cfgsave"
+    outRow = outRow + 1
+
+    wsCmd.Cells(outRow, 1).Value = "cfgenable ""PROD_CFG"""
+
+    MsgBox "Commands generated successfully."
+
+End Sub
+```
+
+This produces output like:
+
+```text
+setcontext 10
+
+alicreate "HOST1","10:00:00:00"
+alicreate "STOR1","20:00:00:00"
+alicreate "HOST2","10:00:00:01"
+
+zonecreate "ZONE1","HOST1;STOR1"
+zonecreate "ZONE2","HOST2;STOR1"
+
+cfgadd "PROD_CFG","ZONE1"
+cfgadd "PROD_CFG","ZONE2"
+
+cfgsave
+cfgenable "PROD_CFG"
+```
+
+You can also improve it further by:
+
+* removing duplicate `alicreate`
+* grouping by FID automatically
+* generating one cfg per fabric
+* sorting commands alphabetically
+
+if you want, I can help you build the “production-grade” version commonly used for Brocade zoning automation.
